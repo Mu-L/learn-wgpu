@@ -1,5 +1,4 @@
 use wasm_bindgen::prelude::*;
-use winit::platform::web::EventLoopExtWebSys;
 
 /// Wrapper around a function pointer
 struct Work {

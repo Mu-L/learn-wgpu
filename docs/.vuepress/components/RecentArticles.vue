@@ -18,7 +18,7 @@ export default {
 	}, 
 	computed:{
 		recentFiles() {
-			let files = this.$site.pages.filter(p => {
+			let files = (this.$site.pages ?? []).filter(p => {
 				return p.regularPath.includes('beginner')
 					|| p.regularPath.includes('intermediate');
 			}).sort((a,b) => {
