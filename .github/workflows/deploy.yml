@@ -18,6 +18,7 @@ jobs:
       - name: Install and Build Vuepress
         run: |
           export NODE_OPTIONS=--openssl-legacy-provider
+          corepack enable
           yarn install
           yarn just-build
 
