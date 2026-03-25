@@ -32,12 +32,15 @@ impl State {
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
             backends: wgpu::Backends::PRIMARY,
             #[cfg(target_arch = "wasm32")]
             backends: wgpu::Backends::GL,
-            ..Default::default()
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
         });
 
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -52,6 +55,18 @@ impl State {
 
         // ...
     }
+
+    // ...
+}
+```
+
+Note: if you specify a display handle via the `display` field on `InstanceDescriptor`
+the display you pass into `create_surface()` must match up with it. You can define
+the `display` on the `InstanceDescriptor` struct directly or with a convenience
+method:
+
+```rust
+let instance = Instance::new(InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle())));
 ```
 
 ### Instance and Adapter
@@ -72,6 +87,8 @@ The options I've passed to `request_adapter` aren't guaranteed to work for all d
 ```rust
 let adapter = instance
     .enumerate_adapters(wgpu::Backends::all())
+    .await
+    .into_iter()
     .filter(|adapter| {
         // Check if this adapter supports our surface
         adapter.is_surface_supported(&surface)
@@ -88,7 +105,7 @@ For more fields you can use to refine your search, [check out the docs](https://
 
 </div>
 
-### The Surface
+### What is the Surface?
 
 The `surface` is the part of the window that we draw to. We need it to draw directly to the screen. Our `window` needs to implement [raw-window-handle](https://crates.io/crates/raw-window-handle)'s `HasRawWindowHandle` trait to create a surface. Fortunately, winit's `Window` fits the bill. We also need it to request our `adapter`.
 
@@ -289,7 +306,7 @@ Here's where the magic happens. First, we need to get a frame to render to.
 ```rust
 // impl State
 
-fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+fn render(&mut self) -> anyhow::Result<()> {
     self.window.request_redraw();
 
     // We can't render unless the surface is configured
@@ -297,7 +314,28 @@ fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         return Ok(());
     }
         
-    let output = self.surface.get_current_texture()?;
+    let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+                self.surface.configure(&self.device, &self.config);
+                surface_texture
+            }
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Validation => {
+                // Skip this frame
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                // You could recreate the devices and all resources
+                // created with it here, but we'll just bail
+                anyhow::bail!("Lost device");
+            }
+        };
 ```
 
 The `get_current_texture` function will wait for the `surface` to provide a new `SurfaceTexture` that we will render to. We'll store this in `output` for later.
@@ -376,13 +414,10 @@ We need to update the event loop again to call this method. We'll also call `upd
                 state.update();
                 match state.render() {
                     Ok(_) => {}
-                    // Reconfigure the surface if it's lost or outdated
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        let size = state.window.inner_size();
-                        state.resize(size.width, size.height);
-                    }
                     Err(e) => {
-                        log::error!("Unable to render {}", e);
+                        // Log the error and exit gracefully
+                        log::error!("{e}");
+                        event_loop.exit();
                     }
                 }
             }
