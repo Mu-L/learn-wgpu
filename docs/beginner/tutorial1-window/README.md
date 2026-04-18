@@ -283,6 +283,11 @@ Now, all we need are some more dependencies that are specific to running in WASM
 
 ```toml
 # This should go in the Cargo.toml in the root directory
+
+# tThis is not required for WASM as wasm-opt should take care of this.
+# It can also interfere with WASM builds so feel free to leave it out.
+# It helps if you are wanting to build native binaries, as it helps reduce
+# the size of the executable, and make it harder to reverse engineer.
 [profile.release]
 strip = true
 
