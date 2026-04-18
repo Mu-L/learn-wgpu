@@ -135,15 +135,15 @@ async fn run() {
 
         // Create the map request
         let buffer_slice = output_buffer.slice(..);
-        let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
+        let (tx, rx) = flume::bounded(1);
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
         // wait for the GPU to finish
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
 
-        match rx.receive().await {
-            Some(Ok(())) => {
+        match rx.recv_async().await {
+            Ok(Ok(())) => {
                 let padded_data = buffer_slice.get_mapped_range();
                 let data = padded_data
                     .chunks(padded_bytes_per_row as _)

@@ -156,12 +156,12 @@ async fn run() {
 
         // NOTE: We have to create the mapping THEN device.poll() before await
         // the future. Otherwise the application will freeze.
-        let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
+        let (tx, rx) = flume::bounded(1);
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        rx.receive().await.unwrap().unwrap();
+        rx.recv_async().await.unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
 

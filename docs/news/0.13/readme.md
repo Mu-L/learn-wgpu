@@ -30,12 +30,12 @@ We would do the following:
 {
     let buffer_slice = output_buffer.slice(..);
 
-    let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
+    let (tx, rx) = flume::bounded(1);
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).unwrap();
     });
     device.poll(wgpu::PollType::wait_indefinitely())?;
-    rx.receive().await.unwrap().unwrap();
+    rx.recv_async().await.unwrap().unwrap();
 
     let data = buffer_slice.get_mapped_range();
 
