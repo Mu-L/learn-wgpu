@@ -40,3 +40,4 @@ log = "0.4"
 tobj = { version = "3.2", default-features = false, features = ["async"] }
 web-time = "1"
 flume = "0.11.1"
+ab_glyph = "0.2.32"
