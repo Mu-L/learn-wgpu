@@ -14,7 +14,6 @@ pub use resources::model::*;
 pub use resources::texture::*;
 pub use shader_canvas::*;
 
-
 #[cfg(not(target_arch = "wasm32"))]
 use pollster::FutureExt;
 use winit::keyboard::KeyCode;
@@ -33,12 +32,7 @@ use instant::{Duration, Instant};
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::application::ApplicationHandler;
 use winit::event_loop::EventLoopProxy;
-use winit::{
-    event::*,
-    event_loop::EventLoop,
-    keyboard::{PhysicalKey},
-    window::Window,
-};
+use winit::{event::*, event_loop::EventLoop, keyboard::PhysicalKey, window::Window};
 
 pub use winit;
 

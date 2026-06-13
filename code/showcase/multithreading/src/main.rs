@@ -53,9 +53,7 @@ impl ApplicationHandler<AppEvent> for App {
     }
 }
 
-fn spawn_render_thread(window: Arc<Window>, _proxy: EventLoopProxy<AppEvent>) {
-    
-}
+fn spawn_render_thread(window: Arc<Window>, _proxy: EventLoopProxy<AppEvent>) {}
 
 fn spawn_game_thread(_proxy: EventLoopProxy<AppEvent>) {}
 

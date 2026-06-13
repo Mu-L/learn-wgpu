@@ -6,7 +6,10 @@ use std::{
 use ab_glyph::{Font as _, ScaleFont};
 use framework::resources::load_binary;
 use glam::{Vec2, vec2};
-use wgpu::BlendState;
+use wgpu::{
+    BlendState,
+    util::{BufferInitDescriptor, DeviceExt},
+};
 
 pub struct BitmapFont {
     glyphs: HashMap<char, Glyph>,
@@ -67,8 +70,6 @@ impl BitmapFont {
                     max_g_height = 0;
                 }
 
-                println!("{c} -> {x}, {y} -> {g_width}, {g_height}");
-
                 if max_g_height < g_height {
                     max_g_height = g_height;
                 }
@@ -128,6 +129,10 @@ impl BitmapFont {
             glyphs,
             texture: texture.create_view(&Default::default()),
         })
+    }
+
+    fn glyph(&self, c: char) -> Option<&Glyph> {
+        self.glyphs.get(&c)
     }
 }
 
@@ -205,9 +210,30 @@ pub struct FontBinding {
     bind_group: wgpu::BindGroup,
 }
 
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct FontVertex {
+    position: glam::Vec2,
+    uv: glam::Vec2,
+    color: glam::Vec4,
+}
+
+impl FontVertex {
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as _,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &wgpu::vertex_attr_array![
+            0 => Float32x2,
+            1 => Float32x2,
+            2 => Float32x4,
+        ],
+    };
+}
+
 pub struct TextPipeline {
     debug: wgpu::RenderPipeline,
     render_format: wgpu::TextureFormat,
+    draw_glyph: wgpu::RenderPipeline,
 }
 
 impl TextPipeline {
@@ -215,17 +241,25 @@ impl TextPipeline {
         device: &wgpu::Device,
         render_format: wgpu::TextureFormat,
         font_binder: &FontBinder,
+        camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("text.wgsl"));
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+
+        let debug_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&font_binder.layout)],
             immediate_size: 0,
         });
 
+        let draw_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&font_binder.layout), Some(camera_layout)],
+            immediate_size: 0,
+        });
+
         let debug = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("TextPipeline::debug"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&debug_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_fullscreen"),
@@ -249,14 +283,115 @@ impl TextPipeline {
             cache: None,
         });
 
+        let draw_glyph = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("TextPipeline::draw_glyph"),
+            layout: Some(&draw_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_glyph"),
+                compilation_options: Default::default(),
+                buffers: &[FontVertex::LAYOUT],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_glyph"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: render_format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             debug,
+            draw_glyph,
             render_format,
         }
     }
 
-    pub fn buffer_text(&self, device: &wgpu::Device, font: &BitmapFont, text: &str) -> TextBuffer {
-        todo!()
+    pub fn buffer_text(
+        &self,
+        device: &wgpu::Device,
+        font: &BitmapFont,
+        font_binder: &FontBinder,
+        sampler: &wgpu::Sampler,
+        text: &str,
+        position: glam::Vec2,
+        color: glam::Vec4,
+    ) -> TextBuffer {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut current_position = position;
+
+        for c in text.chars() {
+            let glyph = font.glyph(c).unwrap();
+
+            if let Some(region) = &glyph.texture_region {
+                let start_vertex = vertices.len() as u32;
+
+                let size = region.max - region.min;
+                // let min = position + glyph.offset;
+                let min = current_position;
+                let max = min + size;
+
+                vertices.push(FontVertex {
+                    position: min,
+                    uv: region.min_uv,
+                    color,
+                });
+                vertices.push(FontVertex {
+                    position: vec2(max.x, min.y),
+                    uv: vec2(region.max_uv.x, region.min_uv.y),
+                    color,
+                });
+                vertices.push(FontVertex {
+                    position: max,
+                    uv: region.max_uv,
+                    color,
+                });
+                vertices.push(FontVertex {
+                    position: vec2(min.x, max.y),
+                    uv: vec2(region.min_uv.x, region.max_uv.y),
+                    color,
+                });
+
+                indices.push(start_vertex);
+                indices.push(start_vertex + 1);
+                indices.push(start_vertex + 2);
+                indices.push(start_vertex);
+                indices.push(start_vertex + 2);
+                indices.push(start_vertex + 3);
+            }
+
+            current_position.x += glyph.h_advance;
+        }
+
+        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some(text),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some(text),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let binding = font_binder.bind(device, font, sampler);
+
+        TextBuffer {
+            vertex_buffer,
+            index_buffer,
+            binding,
+            num_indices: indices.len() as u32,
+        }
     }
 
     pub fn debug_glyph_texture(&self, font: &FontBinding, pass: &mut wgpu::RenderPass<'_>) {
@@ -264,9 +399,25 @@ impl TextPipeline {
         pass.set_bind_group(0, &font.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
+
+    pub fn draw_text(
+        &self,
+        text: &TextBuffer,
+        camera: &wgpu::BindGroup,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        pass.set_pipeline(&self.draw_glyph);
+        pass.set_bind_group(0, &text.binding.bind_group, &[]);
+        pass.set_bind_group(1, camera, &[]);
+        pass.set_vertex_buffer(0, text.vertex_buffer.slice(..));
+        pass.set_index_buffer(text.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..text.num_indices, 0, 0..1);
+    }
 }
 
 pub struct TextBuffer {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    binding: FontBinding,
+    num_indices: u32,
 }
