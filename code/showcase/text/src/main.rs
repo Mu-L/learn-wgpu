@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use framework::{Display, resources::load_string};
+use framework::{Display, resources::load_string, winit::keyboard::KeyCode};
 
 use crate::font::{BitmapFont, FontBinder, TextPipeline};
 
@@ -44,12 +44,14 @@ impl framework::Demo for TextDemo {
     async fn init(display: &Display, res_dir: &Path) -> anyhow::Result<Self> {
         let dialog_dir = res_dir.join("dialog");
         let dialog = load_string(dialog_dir.join("text-demo.txt")).await?;
-        
+
         let fonts_dir = res_dir.join("fonts");
         let chars = HashSet::from_iter(dialog.chars());
+        let padding = 4;
         let sans_font = BitmapFont::load(
             &display.device,
             &display.queue,
+            padding,
             fonts_dir.join("Open_Sans/OpenSans-VariableFont_wdth,wght.ttf"),
             &chars,
         )
@@ -57,6 +59,7 @@ impl framework::Demo for TextDemo {
         let medieval_font = BitmapFont::load(
             &display.device,
             &display.queue,
+            padding,
             fonts_dir.join("MedievalSharp/MedievalSharp-Regular.ttf"),
             &chars,
         )
@@ -84,9 +87,16 @@ impl framework::Demo for TextDemo {
         })
     }
 
-    fn resize(&mut self, display: &Display) {}
+    fn handle_keyboard(&mut self, key: KeyCode, pressed: bool) {
+        match (key, pressed) {
+            (KeyCode::Space, true) => self.cycle_font(),
+            _ => {}
+        }
+    }
 
-    fn update(&mut self, display: &Display, dt: std::time::Duration) {}
+    fn resize(&mut self, _display: &Display) {}
+
+    fn update(&mut self, _display: &Display, _dt: std::time::Duration) {}
 
     fn render(&mut self, display: &mut Display) {
         let frame = match display.surface().get_current_texture() {
@@ -127,7 +137,8 @@ impl framework::Demo for TextDemo {
                 multiview_mask: None,
             });
 
-            self.text_pipeline.debug_glyph_texture(&self.current_font(), &mut pass);
+            self.text_pipeline
+                .debug_glyph_texture(&self.current_font(), &mut pass);
         }
 
         display.queue.submit([encoder.finish()]);

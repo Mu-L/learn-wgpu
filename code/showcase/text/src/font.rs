@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use ab_glyph::Font as _;
+use ab_glyph::{Font as _, ScaleFont};
 use framework::resources::load_binary;
 use glam::{Vec2, vec2};
 use wgpu::BlendState;
@@ -17,11 +17,13 @@ impl BitmapFont {
     pub async fn load(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        padding: u32,
         path: impl AsRef<Path>,
         chars: &HashSet<char>,
     ) -> anyhow::Result<Self> {
         let font_bytes = load_binary(path.as_ref()).await?;
-        let font = ab_glyph::FontRef::try_from_slice(&font_bytes)?;
+        let glyph_scale = 64.0;
+        let font = ab_glyph::FontRef::try_from_slice(&font_bytes)?.into_scaled(glyph_scale);
 
         // Figure out texture size
         let glyph_size = 64;
@@ -42,20 +44,41 @@ impl BitmapFont {
             view_formats: &[],
         });
 
-        let glyph_patch_size = glyph_size * glyph_size;
         let mut glyphs = HashMap::new();
-        let mut x = 0;
-        let mut y = 0;
+        let mut x = padding;
+        let mut y = padding;
+
+        let mut max_g_height = 0;
 
         for c in chars.iter().copied() {
-            let glyph = font.glyph_id(c).with_scale(glyph_size as f32);
+            let glyph = font.scaled_glyph(c);
+            let glyph_id = glyph.id;
+            let offset = vec2(glyph.position.x, glyph.position.y);
+            let mut texture_region = None;
+
             if let Some(outline) = font.outline_glyph(glyph) {
-                let mut coverage = vec![0u8; glyph_patch_size as _];
+                let g_width = outline.px_bounds().width().ceil() as u32;
+                let g_height = outline.px_bounds().height().ceil() as u32;
+
+                // Maybe have the texture atlas be layered
+                if x + g_width >= texture.size().width {
+                    x = padding;
+                    y += max_g_height + padding;
+                    max_g_height = 0;
+                }
+
+                println!("{c} -> {x}, {y} -> {g_width}, {g_height}");
+
+                if max_g_height < g_height {
+                    max_g_height = g_height;
+                }
+
+                let mut coverage = vec![0u8; (g_width * g_height) as _];
                 outline.draw(|x, y, c| {
-                    coverage[(x + y * glyph_size) as usize] = (255.0 * c) as u8;
+                    coverage[(x + y * g_width) as usize] = (255.0 * c) as u8;
                 });
 
-                let bytes_per_row = coverage.len() as u32 / glyph_size;
+                let bytes_per_row = g_width;
                 queue.write_texture(
                     wgpu::TexelCopyTextureInfoBase {
                         texture: &texture,
@@ -67,38 +90,38 @@ impl BitmapFont {
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(bytes_per_row),
-                        rows_per_image: Some(glyph_size),
+                        rows_per_image: Some(g_height),
                     },
                     wgpu::Extent3d {
-                        width: glyph_size,
-                        height: glyph_size,
+                        width: g_width,
+                        height: g_height,
                         depth_or_array_layers: 1,
                     },
                 );
 
                 let min = vec2(x as _, y as _);
-                let max = min + vec2(glyph_size as _, glyph_size as _);
+                let max = min + vec2(g_width as _, g_height as _);
                 let min_uv = min / texture.size().width as f32;
                 let max_uv = max / texture.size().height as f32;
 
-                glyphs.insert(
-                    c,
-                    Glyph {
-                        min,
-                        max,
-                        min_uv,
-                        max_uv,
-                    },
-                );
+                x += g_width + padding;
 
-                x += glyph_size;
-
-                // Maybe have the texture atlas be layered
-                if x >= texture.size().width {
-                    x = 0;
-                    y += glyph_size;
-                }
+                texture_region = Some(TextureRegion {
+                    min,
+                    max,
+                    min_uv,
+                    max_uv,
+                })
             }
+
+            glyphs.insert(
+                c,
+                Glyph {
+                    h_advance: font.h_advance(glyph_id),
+                    offset,
+                    texture_region,
+                },
+            );
         }
 
         Ok(Self {
@@ -108,7 +131,15 @@ impl BitmapFont {
     }
 }
 
+#[derive(Debug)]
 pub struct Glyph {
+    offset: Vec2,
+    h_advance: f32,
+    texture_region: Option<TextureRegion>,
+}
+
+#[derive(Debug)]
+pub struct TextureRegion {
     min: Vec2,
     max: Vec2,
     min_uv: Vec2,
@@ -145,7 +176,12 @@ impl FontBinder {
         Self { layout }
     }
 
-    pub fn bind(&self, device: &wgpu::Device, font: &BitmapFont, sampler: &wgpu::Sampler) -> FontBinding {
+    pub fn bind(
+        &self,
+        device: &wgpu::Device,
+        font: &BitmapFont,
+        sampler: &wgpu::Sampler,
+    ) -> FontBinding {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.layout,

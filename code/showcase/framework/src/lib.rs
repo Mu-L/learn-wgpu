@@ -14,13 +14,16 @@ pub use resources::model::*;
 pub use resources::texture::*;
 pub use shader_canvas::*;
 
+
 #[cfg(not(target_arch = "wasm32"))]
 use pollster::FutureExt;
+use winit::keyboard::KeyCode;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
 
 use std::ops::Deref;
 use std::path::Path;
+#[cfg(target_arch = "wasm32")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -33,9 +36,11 @@ use winit::event_loop::EventLoopProxy;
 use winit::{
     event::*,
     event_loop::EventLoop,
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::{PhysicalKey},
     window::Window,
 };
+
+pub use winit;
 
 #[derive(Debug)]
 pub struct Display {
