@@ -37,10 +37,10 @@ fn random_position_scale(min: Vec3, max: Vec3) -> Vec4 {
 pub struct Stencil {
     instance_buffer: framework::RawBuffer<InstanceVertex>,
     camera_uniforms: framework::CameraUniform,
-    camera: framework::Camera,
-    camera_controller: framework::CameraController,
+    camera: framework::FpvCamera,
+    camera_controller: framework::FpvCameraController,
     camera_bind_group: wgpu::BindGroup,
-    projection: framework::Projection,
+    projection: framework::PerspectiveProjection,
     depth_stencil: wgpu::Texture,
     depth_stencil_view: wgpu::TextureView,
     depth_stencil_format: wgpu::TextureFormat,
@@ -84,9 +84,9 @@ impl Demo for Stencil {
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
         );
 
-        let camera = framework::Camera::new(glam::vec3(10.0, 10.0, 10.0), -2.37, -0.5);
-        let camera_controller = framework::CameraController::new(1.0, 0.01);
-        let projection = framework::Projection::new(
+        let camera = framework::FpvCamera::new(glam::vec3(10.0, 10.0, 10.0), -2.37, -0.5);
+        let camera_controller = framework::FpvCameraController::new(1.0, 0.01);
+        let projection = framework::PerspectiveProjection::new(
             display.config.width,
             display.config.height,
             PI * 0.25,

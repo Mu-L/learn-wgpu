@@ -1,6 +1,6 @@
 use std::{f32::consts::PI, path::Path};
 
-use framework::{Camera, CameraController, Projection};
+use framework::{Camera, FpvCamera, FpvCameraController, PerspectiveProjection, Projection};
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::keyboard::KeyCode;
 
@@ -43,13 +43,13 @@ struct Snow {
     config_buffer: wgpu::Buffer,
     iteration: usize,
     num_particles: u32,
-    camera: Camera,
-    projection: Projection,
+    camera: FpvCamera,
+    projection: PerspectiveProjection,
     uniforms: Uniforms,
     uniform_buffer: wgpu::Buffer,
     uniforms_bind_group: wgpu::BindGroup,
     draw_particles: wgpu::RenderPipeline,
-    camera_controller: CameraController,
+    camera_controller: FpvCameraController,
     uniforms_dirty: bool,
     time_since_spawn: f32,
     spawn_timer: f32,
@@ -157,9 +157,9 @@ impl framework::Demo for Snow {
                     cache: None,
                 });
 
-        let camera = Camera::new(glam::vec3(0.0, 0.0, 0.0), 0.0, 0.0);
-        let camera_controller = CameraController::new(0.1, 1.0);
-        let projection = Projection::new(
+        let camera = FpvCamera::new(glam::vec3(0.0, 0.0, 0.0), 0.0, 0.0);
+        let camera_controller = FpvCameraController::new(0.1, 1.0);
+        let projection = PerspectiveProjection::new(
             display.config.width,
             display.config.height,
             PI * 0.25,
@@ -168,7 +168,7 @@ impl framework::Demo for Snow {
         );
 
         let uniforms = Uniforms {
-            view_proj: projection.calc_matrix() * camera.calc_matrix(),
+            view_proj: projection.proj() * camera.view(),
         };
         let uniform_buffer = display.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("uniform_buffer"),
@@ -289,8 +289,8 @@ impl framework::Demo for Snow {
             println!("({}, {})", display.config.width, display.config.height);
             self.uniforms_dirty = false;
             self.camera_controller.update_camera(&mut self.camera, dt);
-            let proj = self.projection.calc_matrix();
-            let view = self.camera.calc_matrix();
+            let proj = self.projection.proj();
+            let view = self.camera.view();
 
             println!("view: {view:?}");
             println!("proj: {proj:?}");

@@ -1,17 +1,154 @@
 use std::{f32::consts::FRAC_PI_2, time::Duration};
 
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::{dpi::PhysicalPosition, event::MouseScrollDelta, keyboard::KeyCode};
 
 const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
+pub trait Camera {
+    fn view(&self) -> glam::Mat4;
+}
+
+pub trait Projection {
+    fn proj(&self) -> glam::Mat4;
+}
+
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct CameraData {
+    view: glam::Mat4,
+    proj: glam::Mat4,
+    view_proj: glam::Mat4,
+}
+
+impl Default for CameraData {
+    fn default() -> Self {
+        Self {
+            view: glam::Mat4::IDENTITY,
+            proj: glam::Mat4::IDENTITY,
+            view_proj: glam::Mat4::IDENTITY,
+        }
+    }
+}
+
+pub struct CameraBuffer {
+    buffer: wgpu::Buffer,
+    data: CameraData,
+    dirty: bool,
+}
+
+impl CameraBuffer {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let data = CameraData::default();
+        let buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("CameraBuffer"),
+            contents: bytemuck::bytes_of(&data),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        Self {
+            data,
+            buffer,
+            dirty: false,
+        }
+    }
+
+    pub fn flush(&mut self, queue: &wgpu::Queue) {
+        if self.dirty {
+            queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&self.data));
+            self.dirty = false;
+        }
+    }
+
+    pub fn update(&mut self, camera: &impl Camera, projection: &impl Projection) {
+        self.data.view = camera.view();
+        self.data.proj = projection.proj();
+        self.data.view_proj = self.data.proj * self.data.view;
+        self.dirty = true;
+    }
+
+    pub fn update_and_flush(
+        &mut self,
+        camera: &impl Camera,
+        projection: &impl Projection,
+        queue: &wgpu::Queue,
+    ) {
+        self.update(camera, projection);
+        self.flush(queue);
+    }
+}
+
+pub struct CameraBinder {
+    layout: wgpu::BindGroupLayout,
+}
+
+impl CameraBinder {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("CameraBinder"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZero::new(
+                            std::mem::size_of::<CameraData>() as _
+                        ),
+                    },
+                    count: None,
+                }],
+            });
+
+        Self { layout }
+    }
+
+    pub fn bind(
+        &self,
+        device: &wgpu::Device,
+        camera: &impl Camera,
+        projection: &impl Projection,
+    ) -> (CameraBuffer, CameraBinding) {
+        let buffer = CameraBuffer::new(device);
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("CameraBinding"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.buffer.as_entire_binding(),
+            }],
+        });
+
+        let binding = CameraBinding { bind_group };
+
+        (buffer, binding)
+    }
+
+    pub fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout
+    }
+}
+
+pub struct CameraBinding {
+    bind_group: wgpu::BindGroup,
+}
+
+impl CameraBinding {
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+}
+
 #[derive(Debug)]
-pub struct Camera {
+pub struct FpvCamera {
     pub position: glam::Vec3,
     yaw: f32,
     pitch: f32,
 }
 
-impl Camera {
+impl FpvCamera {
     pub fn new<V: Into<glam::Vec3>>(position: V, yaw: f32, pitch: f32) -> Self {
         Self {
             position: position.into(),
@@ -19,8 +156,10 @@ impl Camera {
             pitch,
         }
     }
+}
 
-    pub fn calc_matrix(&self) -> glam::Mat4 {
+impl Camera for FpvCamera {
+    fn view(&self) -> glam::Mat4 {
         let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
 
@@ -33,14 +172,14 @@ impl Camera {
 }
 
 #[derive(Debug)]
-pub struct Projection {
+pub struct PerspectiveProjection {
     aspect: f32,
     fovy: f32,
     znear: f32,
     zfar: f32,
 }
 
-impl Projection {
+impl PerspectiveProjection {
     pub fn new<F: Into<f32>>(width: u32, height: u32, fovy: F, znear: f32, zfar: f32) -> Self {
         Self {
             aspect: width as f32 / height as f32,
@@ -53,14 +192,16 @@ impl Projection {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.aspect = width as f32 / height as f32;
     }
+}
 
-    pub fn calc_matrix(&self) -> glam::Mat4 {
+impl Projection for PerspectiveProjection {
+    fn proj(&self) -> glam::Mat4 {
         glam::Mat4::perspective_rh(self.fovy, self.aspect, self.znear, self.zfar)
     }
 }
 
 #[derive(Debug)]
-pub struct CameraController {
+pub struct FpvCameraController {
     amount_left: f32,
     amount_right: f32,
     amount_forward: f32,
@@ -74,7 +215,7 @@ pub struct CameraController {
     sensitivity: f32,
 }
 
-impl CameraController {
+impl FpvCameraController {
     pub fn new(speed: f32, sensitivity: f32) -> Self {
         Self {
             amount_left: 0.0,
@@ -136,7 +277,7 @@ impl CameraController {
         };
     }
 
-    pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
+    pub fn update_camera(&mut self, camera: &mut FpvCamera, dt: Duration) {
         let dt = dt.as_secs_f32();
 
         // Move forward/backward and left/right

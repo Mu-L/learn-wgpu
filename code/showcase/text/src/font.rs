@@ -4,7 +4,7 @@ use std::{
 };
 
 use ab_glyph::{Font as _, ScaleFont};
-use framework::resources::load_binary;
+use framework::{CameraBinder, CameraBinding, resources::load_binary};
 use glam::{Vec2, vec2};
 use wgpu::{
     BlendState,
@@ -56,7 +56,10 @@ impl BitmapFont {
         for c in chars.iter().copied() {
             let glyph = font.scaled_glyph(c);
             let glyph_id = glyph.id;
-            let offset = vec2(glyph.position.x, glyph.position.y);
+            let offset = vec2(font.h_side_bearing(glyph_id), font.line_gap());
+
+            println!("offset: {offset:?}");
+
             let mut texture_region = None;
 
             if let Some(outline) = font.outline_glyph(glyph) {
@@ -210,6 +213,12 @@ pub struct FontBinding {
     bind_group: wgpu::BindGroup,
 }
 
+impl FontBinding {
+    fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+}
+
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct FontVertex {
@@ -241,7 +250,7 @@ impl TextPipeline {
         device: &wgpu::Device,
         render_format: wgpu::TextureFormat,
         font_binder: &FontBinder,
-        camera_layout: &wgpu::BindGroupLayout,
+        camera_binder: &CameraBinder,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("text.wgsl"));
 
@@ -253,7 +262,7 @@ impl TextPipeline {
 
         let draw_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[Some(&font_binder.layout), Some(camera_layout)],
+            bind_group_layouts: &[Some(&font_binder.layout), Some(camera_binder.layout())],
             immediate_size: 0,
         });
 
@@ -337,8 +346,7 @@ impl TextPipeline {
                 let start_vertex = vertices.len() as u32;
 
                 let size = region.max - region.min;
-                // let min = position + glyph.offset;
-                let min = current_position;
+                let min = current_position + glyph.offset;
                 let max = min + size;
 
                 vertices.push(FontVertex {
@@ -403,12 +411,12 @@ impl TextPipeline {
     pub fn draw_text(
         &self,
         text: &TextBuffer,
-        camera: &wgpu::BindGroup,
+        camera: &CameraBinding,
         pass: &mut wgpu::RenderPass<'_>,
     ) {
         pass.set_pipeline(&self.draw_glyph);
-        pass.set_bind_group(0, &text.binding.bind_group, &[]);
-        pass.set_bind_group(1, camera, &[]);
+        pass.set_bind_group(0, text.binding.bind_group(), &[]);
+        pass.set_bind_group(1, camera.bind_group(), &[]);
         pass.set_vertex_buffer(0, text.vertex_buffer.slice(..));
         pass.set_index_buffer(text.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..text.num_indices, 0, 0..1);

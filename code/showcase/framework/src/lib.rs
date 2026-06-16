@@ -196,9 +196,13 @@ impl CameraUniform {
         Self { data, buffer }
     }
 
-    pub fn update_view_proj(&mut self, camera: &camera::Camera, projection: &camera::Projection) {
+    pub fn update_view_proj(
+        &mut self,
+        camera: &camera::FpvCamera,
+        projection: &camera::PerspectiveProjection,
+    ) {
         self.data.view_position = camera.position.extend(1.0);
-        self.data.view_proj = projection.calc_matrix() * camera.calc_matrix()
+        self.data.view_proj = projection.proj() * camera.view()
     }
 
     pub fn update_buffer(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {

@@ -34,10 +34,10 @@ enum DisplayMode {
 struct Mipmaps {
     lmb_presssed: bool,
     camera_uniforms: framework::CameraUniform,
-    camera: framework::Camera,
-    camera_controller: framework::CameraController,
+    camera: framework::FpvCamera,
+    camera_controller: framework::FpvCameraController,
     camera_bind_group: wgpu::BindGroup,
-    projection: framework::Projection,
+    projection: framework::PerspectiveProjection,
     depth_view: wgpu::TextureView,
     depth_format: wgpu::TextureFormat,
     ground_vb: framework::RawBuffer<Vertex>,
@@ -59,11 +59,16 @@ impl std::fmt::Debug for Mipmaps {
 
 impl Demo for Mipmaps {
     async fn init(display: &framework::Display, _res_dir: &Path) -> anyhow::Result<Self> {
-        let projection =
-            framework::Projection::new(display.width(), display.height(), PI * 0.25, 0.1, 100.0);
+        let projection = framework::PerspectiveProjection::new(
+            display.width(),
+            display.height(),
+            PI * 0.25,
+            0.1,
+            100.0,
+        );
 
-        let camera = framework::Camera::new(vec3(0.0, 1.0, 0.0), 0.0, 0.0);
-        let camera_controller = framework::CameraController::new(1.0, 0.01);
+        let camera = framework::FpvCamera::new(vec3(0.0, 1.0, 0.0), 0.0, 0.0);
+        let camera_controller = framework::FpvCameraController::new(1.0, 0.01);
         let mut camera_uniforms = framework::CameraUniform::new(&display.device);
         camera_uniforms.update_view_proj(&camera, &projection);
         let camera_layout =

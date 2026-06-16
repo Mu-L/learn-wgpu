@@ -6,10 +6,40 @@ use std::{
     path::Path,
 };
 
-use framework::{Display, resources::load_string, winit::keyboard::KeyCode};
+use framework::{
+    Camera, CameraBinder, Display, Projection, resources::load_string, winit::keyboard::KeyCode,
+};
 use glam::{vec2, vec4};
 
 use crate::font::{BitmapFont, FontBinder, TextPipeline};
+
+pub struct TextCamera {
+    width: f32,
+    height: f32,
+}
+
+impl TextCamera {
+    pub fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+
+    pub fn resize(&mut self, width: f32, height: f32) {
+        self.width = width;
+        self.height = height;
+    }
+}
+
+impl Camera for TextCamera {
+    fn view(&self) -> glam::Mat4 {
+        glam::Mat4::IDENTITY
+    }
+}
+
+impl Projection for TextCamera {
+    fn proj(&self) -> glam::Mat4 {
+        glam::Mat4::orthographic_rh(0.0, self.width, self.height, 0.0, 0.0, 1.0)
+    }
+}
 
 struct TextDemo {
     sans_font: BitmapFont,
@@ -20,12 +50,9 @@ struct TextDemo {
     medieval_binding: font::FontBinding,
     sans_text: font::TextBuffer,
     medieval_text: font::TextBuffer,
-    camera: framework::Camera,
-    camera_controller: framework::CameraController,
-    camera_uniforms: framework::CameraUniform,
-    camera_bind_group: wgpu::BindGroup,
-    lmb_presssed: bool,
-    projection: framework::Projection,
+    camera: TextCamera,
+    camera_buffer: framework::CameraBuffer,
+    camera_binding: framework::CameraBinding,
 }
 
 impl TextDemo {
@@ -52,51 +79,12 @@ impl std::fmt::Debug for TextDemo {
 
 impl framework::Demo for TextDemo {
     async fn init(display: &Display, res_dir: &Path) -> anyhow::Result<Self> {
-        // TODO: replace this with 2D camera
-        let camera = framework::Camera::new(glam::vec3(10.0, 10.0, 10.0), -2.37, -0.5);
-        let camera_controller = framework::CameraController::new(1.0, 0.01);
-        let projection = framework::Projection::new(
-            display.config.width,
-            display.config.height,
-            PI * 0.25,
-            0.1,
-            100.0,
-        );
-        let lmb_presssed = false;
-
-        let mut camera_uniforms = framework::CameraUniform::new(&display.device);
-        camera_uniforms.update_view_proj(&camera, &projection);
-
-        let camera_layout =
-            display
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: None,
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    }],
-                });
-
-        let camera_bind_group = display
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("uniforms_bind_group"),
-                layout: &camera_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_uniforms.buffer.as_entire_binding(),
-                }],
-            });
+        let camera = TextCamera::new(display.width() as _, display.height() as _);
+        let camera_binder = CameraBinder::new(&display.device);
+        let (camera_buffer, camera_binding) = camera_binder.bind(&display.device, &camera, &camera);
 
         let dialog_dir = res_dir.join("dialog");
-        let dialog = load_string(dialog_dir.join("text-demo.txt")).await?;
+        let dialog = load_string(dbg!(dialog_dir.join("text-demo.txt"))).await?;
 
         let fonts_dir = res_dir.join("fonts");
         let chars = HashSet::from_iter(dialog.chars());
@@ -132,7 +120,7 @@ impl framework::Demo for TextDemo {
             &display.device,
             display.config.format,
             &font_binder,
-            &camera_layout,
+            &camera_binder,
         );
 
         let sans_text = text_pipeline.buffer_text(
@@ -163,39 +151,19 @@ impl framework::Demo for TextDemo {
             medieval_binding,
             sans_text,
             medieval_text,
-            projection,
             camera,
-            camera_controller,
-            camera_uniforms,
-            camera_bind_group,
-            lmb_presssed,
+            camera_buffer,
+            camera_binding,
         })
     }
 
-    fn handle_keyboard(&mut self, key: KeyCode, pressed: bool) {
-        self.camera_controller.process_keyboard(key, pressed);
-        // match (key, pressed) {
-        //     (KeyCode::Space, true) => self.cycle_font(),
-        //     _ => {}
-        // }
-    }
-
-    fn handle_mouse_button(&mut self, button: u32, pressed: bool) {
-        if button == 0 {
-            self.lmb_presssed = pressed;
-        }
-    }
-
-    fn handle_mouse_move(&mut self, dx: f64, dy: f64) {
-        self.camera_controller.process_mouse(dx, dy);
-    }
-
     fn resize(&mut self, display: &Display) {
-        self.projection.resize(display.width(), display.height());
+        self.camera
+            .resize(display.width() as _, display.height() as _);
     }
 
-    fn update(&mut self, display: &Display, dt: std::time::Duration) {
-        self.camera_controller.update_camera(&mut self.camera, dt);
+    fn update(&mut self, _display: &Display, _dt: std::time::Duration) {
+        // self.camera_controller.update_camera(&mut self.camera, dt);
     }
 
     fn render(&mut self, display: &mut Display) {
@@ -219,10 +187,8 @@ impl framework::Demo for TextDemo {
 
         let mut encoder = display.device.create_command_encoder(&Default::default());
 
-        self.camera_uniforms
-            .update_view_proj(&self.camera, &self.projection);
-        self.camera_uniforms
-            .update_buffer(&display.device, &mut encoder);
+        self.camera_buffer.update(&self.camera, &self.camera);
+        self.camera_buffer.flush(&display.queue);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -243,10 +209,10 @@ impl framework::Demo for TextDemo {
             });
 
             self.text_pipeline
-                .draw_text(&self.sans_text, &self.camera_bind_group, &mut pass);
+                .draw_text(&self.sans_text, &self.camera_binding, &mut pass);
 
-            self.text_pipeline
-                .debug_glyph_texture(&self.current_font(), &mut pass);
+            // self.text_pipeline
+            //     .debug_glyph_texture(&self.current_font(), &mut pass);
         }
 
         display.queue.submit([encoder.finish()]);
